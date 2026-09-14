@@ -1,0 +1,371 @@
+##01_great_recession_education_political_trust
+/*Introduction and data analysis*/
+clear
+browse
+summarize
+tab 
+append using
+
+
+/*rescale*/
+replace var = ( poltrust - r(min) ) / ( r(max) - r(min) ) * 10	
+
+/*Multivariate analysis*/
+/*Missing values*/
+misstable summarize
+count if missing(variable_name)
+list variable_name if missing(variable_name)
+
+/*Outliers/nonormality*/
+graph box 
+twoway (scatter ) || (lfit )
+sktest variable_name /*if p-value low then deviation from normality*/
+histogram variable_name, normal
+qnorm variable_name
+summarize var, detail
+
+/*linearity*/
+twoway (scatter ) || (lfit )
+
+/*residual errors*/
+twoway (scatter ) || (lfit )
+rvfplot
+ 
+/*residual errors normality*/
+twoway (scatter ) || (lfit )
+qnorm residuals_variable
+pnorm residuals_variable
+kdensity residuals_variable, normal
+
+/*homoschedasticity*/
+estat hettest
+generate ln_var = ln(var) /*in case of heteroscedasticity*/
+
+/*multicollinearity*/
+vif
+corr
+test 
+
+/*generate dummy*/
+generate var_dummy = (var=="__" | var=="__") /*or*/
+tab var, gen (var_dummy)
+
+/*Regression*/
+regress 
+regress ,robust
+regress ,beta
+
+##02_covid_gender_political_trust
+clear all
+pwcorr stfeco - stfhlth // From trust in parliament till trust in the UN, nothing really to see because it is reflected within the factor screening
+
+* remove the variables that are correlated with both factors: they are meaningless and must be OMITTED
+* Pairwise correlation > 0.3
+* remove the variables not strongly correlated with others
+* if the varaible is too much correlated --> perfectly collinear OMITTED (per forza)
+* Partial correlation < 0.7, forget about it
+
+
+* HeatMap
+matrix C = r(C)
+heatplot C, ///
+values(format(%9.3f)) ///
+color(hcl bluered, intensity(.8)) ///
+xlabel(, angle(45)) ///
+aspectratio(1) scale(0.8) ///
+lower nodiagonal ///
+title("Pairwise correlations") ///
+legend(off)
+graph export "heatmap.png", replace
+
+
+* we see form the matrix that this variables can form a factor (political_trust, for example): 
+* trstprl =  Trust in country's parliament
+* trstlgl= Trust in the legal system
+* trstplc = Trust in the police
+* trstplt =Trust in politicians
+* trstprt=  Trust in political parties
+* trstep = Trust in the European Parliament
+* trstun =  Trust in the United Nations
+
+
+factor stfeco - stfhlth
+* we perfom initially the factor analysis wthout manipulating the variables 
+* from this we understand that we just need to keep one factor, since only Factor 1 has eigenvalue > 1
+* we can also see that all the variables are more correlated to Factor 1
+* Check uniqueness, > 0.7, remove variable and re-do.
+
+* Next, STATA provides two additional tests. One is called Kaiser-Meyer- Olkin Measure of sampling adequacy. Again it informs us about the extent in which the variables are correlated and hence the extent to which our sample is adequate for FA. Bartlett's test for sphericity is a test where the null hypothesis is that there is no correlation between the variables. Here we see that the test is strongly rejected
+
+factortest stfeco - stfhlth
+* determinant = 0.005 // last year, so it could be different
+* we want to be very small (lots of correlation), but not exactly equal to zero becuase otherwise perfect collinearity
+* Bartlett test P(R=I)<0.05 (0.00, last year)
+* KMO>0.5 (0.860, last year)
+
+* The conclusion from those tests above is that the chosen variables are correlated, and we can do factor analysis with them. Before actually, asking to do FA, we can ask for one more test. This is the KMO specific measures for each of the variables (not really needed).
+
+estat kmo
+* Individual intercorrelation, calculated the ratio of the variable's common variance to their partial variance (all very high), >0.5.
+
+* if there are problems with the determinant = 0, then we should use the collin function and look to the VIFs. Normally, if VIFs>10 then we should remove the variable.
+* We can also check through the KMO MSA the values of each variable, if it's <0.50.
+collin stfeco - stfhlth
+
+// NOW MOVE TO THE EXTRACTION STAGE
+* Our Stata tools (the Kaiser rule, which employs eigenvalues, the screen test criterion, and the factor analysis table recommended retaining only one factor as the best situation)
+* eigenvalue = % of the entire model variance that a specific factor accounts for
+* Factor 1 has eigenvalue of 4.34 
+screeplot, yline (1) // inutile
+factor stfeco - stfhlth , factors (1) // extract 1 Factor 
+asdoc factor trstprl trstlgl trstplc trstplt trstprt trstep trstun , factors (1)
+rotate, varimax // in order to have a better structure and better interpretation
+rotate, promax //oblique 
+estat common // if orthogonal rotation there will be no correlation
+predict satis // name the Factor, 
+summarize satis
+* poltrust acquires factor scores (based on the score of the laodings of the variables)
+* min = -2.075 & max = 2.479
+
+
+/// NOW MOVE ON TO MULTIPLE LINEAR REGRESSION ///
+* several regressions all with the poltrust factor as the dependent variable, comparing it each time with different combinations of independent variables
+*** 1ST ***
+* independent variable = round dummy variable (indicate the difference in trust in poltics before and after COVID)
+// DUMMY VARIABLE FOR THE ROUNDS
+gen rounds = 0
+replace rounds = 1 if essround == 10.0+00
+tab rounds //metti solo il numero del round
+// dummy variable = 1 if the round is 2018
+
+reg satis i. round [w=overallwght]
+reg satis rounds [w=overallwght] //best way
+asdoc reg satis rounds [w=overallwght], replace dec(4)
+* gives a negative coefficient, showing that political trust was higher in the period before COVID19
+* pvalue = 0 = therefore we can establish that our result is statistically significant
+
+
+*** 2ND ***
+* add another independent variable = dummy gender variable
+gen gender = 0
+replace gender = 1 if gndr == 1 //(non ti confondere è già binaria)
+tab gender
+* gender = 1 = male
+reg satis i. round gender [w=overallwght]
+reg satis rounds gender [w=overallwght] //best way
+asdoc reg satis rounds gender [w=overallwght], replace dec(4) 
+* negative coefficient BUT pvalue = 0.144 = meaning that the result is not statistically
+* significant (we cannot state with certainty that the respondent't gender significantly influenced poltrust)
+
+
+*** 3RD ***
+* NOW ATTEMT TO INTRODUCE AN INTERACTION BETWEEN THE GENDER AND THE TIMEFRAME OF THE RESPONSE
+* new variable = roundXgender
+gen roundgender = gender * rounds
+regress satis roundgender gender rounds [w=overallwght]
+asdoc regress satis roundgender gender rounds [w=overallwght], replace dec(4)
+
+* OTHER INTERACTION BETWEEN YEARS OF FULL TIME EDUCATION COMPLETED AND GENDER
+* new variable = eduyrsXgender
+gen eduyrsgender = eduyrs * gender
+gen ageXround = agea * rounds
+gen eduyrsXround = eduyrs * rounds
+regress satis roundgender eduyrsgender eduyrsXround ageXround eduyrs gender rounds agea [w=overallwght]
+asdoc regress satis roundgender eduyrsgender eduyrsXround ageXround eduyrs gender rounds agea [w=overallwght], replace dec(4)
+
+* However, both, when added to the regression, had a pvalue < 0.05, which identifies that they are statistically insignificant
+* Instead, including the variables eduyrs and agea, we observed that they significantly influenced the model
+* eduyrs = 0.0287533
+* agea = -0.0030844
+* However, the final multiple regression model has a very low R2 value (0.0279).
+* meaning that the model fails to explain an important portion of the observed variability in the dependent variable using the chosen independent variables.
+
+##03_covid_institutional_trust
+TASK 3
+clear all
+use "/Users/massimodinicola/Desktop/Riccardo/Application for management/Work group/Task 3/europecovid.dta"
+browse
+tab location
+use "/Users/massimodinicola/Desktop/Riccardo/Application for management/Work group/Task 3/ESS10.dta"
+
+/// CLUSTER ///
+// STAGE 1 & 2: Select Variables and Data Screening
+des
+summarize
+browse
+// Clean the data and handle missing values
+misstable summarize total_cases total_deaths total_tests stringency_index
+drop if missing(total_cases) | missing(total_deaths) | missing(total_tests) | missing(stringency_index) // Non droppare
+
+// Summarize the variables to check metrics and distribution
+summarize total_cases total_deaths total_tests stringency_index
+
+// Standardize the variables due to different metrics
+foreach var of varlist total_cases total_deaths total_tests stringency_index {
+egen `var'_std = std(`var')
+}
+
+sum *_std   
+
+// Detect multivariate outliers using a dissimilarity matrix and heatplot
+mat dissim D =  *_std, L2squared names(location) 
+heatplot D  // multivariate outliers 
+
+// Remove outliers (e.g., specific countries)
+drop if location == "Russia"
+
+// Recheck dissimilarity matrix without the outliers
+mat dissim D =  *_std, L2squared names(location) 
+heatplot D
+
+drop if location == "United Kingdom" 
+
+// Profile plot to double-check data structure
+encode location, gen(location_num)
+profileplot *_std, by(location_num)
+
+// STAGE 3: Clustering Analysis
+// Use squared Euclidean distance to measure similarity
+// Run cluster analysis using complete linkage and squared Euclidean distance
+cluster complete *_std, measure(L2squared) name(location_groups_complete)
+
+// Run cluster analysis using average linkage to minimize within-cluster variation and less affected by outliers
+cluster averagelinkage *_std, measure(L2squared) name(location_groups_average) //use this
+
+// Visualize the dendrogram to identify potential clusters
+cluster dendrogram location_groups_complete, labels(location) horizontal
+
+// Visualize the dendrogram to identify potential clusters
+cluster dendrogram location_groups_average, labels(location) horizontal
+
+// Evaluate the stopping rule to determine the optimal number of clusters
+asdoc cluster stop
+asdoc cluster stop, rule(duda)
+
+// Based on dendrogram and stopping rule, choose 5 clusters and generate cluster variables
+cluster generate location_cluster = groups(5), name(location_groups_average) ties(error) //usare l'avg
+
+// Analyze which location belongs to each group
+asdoc tab location location_clust
+
+// Compare clusters to see how they differ based on standardized variables
+asdoc tabstat *_std, by(location_clust)
+
+Cluster 1:
+All variables are below the overall mean (negative standardized values).
+Especially low levels of total_cases (tes_std) and total_tests (tts_std), suggesting these regions may have experienced less severe COVID-19 impacts or had limited testing capacities.
+The stringency_index is relatively high compared to other variables, indicating stricter measures were implemented despite lower case and test levels.
+
+Cluster 2:
+Slightly below the overall mean for all variables.
+Closer to average values for stringency_index, suggesting a balanced response relative to the other clusters.
+
+Cluster 3:
+Significantly below the mean for all variables, especially stringency_index and total_tests.
+Likely includes regions with minimal testing and less strict measures, potentially leading to underreporting of cases and deaths.
+
+Cluster 4:
+Above the mean for all variables.
+High values for total_cases, total_deaths, and stringency_index indicate regions with more severe impacts and stricter measures.
+Suggests areas with stronger infrastructure for recording and response.
+
+Cluster 5:
+Strongly above the mean for all variables.
+Extremely high levels of total_tests and stringency_index, which could represent regions with aggressive testing strategies and high governmental intervention.
+
+// PROFILING STAGE
+// Analyze additional variables to describe the clusters
+// Include median age, life expectancy, and extreme poverty
+summarize median_age life_expectancy extreme_poverty
+foreach var of varlist median_age life_expectancy extreme_poverty {
+    egen `var'_std = std(`var')
+}
+
+asdoc tabstat *_std median_age_std life_expectancy_std extreme_poverty_std, by(location_clust)
+
+Cluster 1:
+Below the mean for median and extremity but above the mean for life expectancy.
+This suggests regions where life expectancy is relatively higher, but the median condition and extremity indicators are less prominent.
+
+Cluster 2:
+Close to the mean for median and extremity (values near zero) but significantly below the mean for life expectancy.
+Indicates regions where life expectancy is considerably lower, while the other factors show average conditions.
+
+Cluster 3:
+Below the mean for all three variables, especially extremity.
+These regions may represent areas with low median conditions, lower life expectancy, and minimal extremity, potentially less developed or disadvantaged.
+
+Cluster 4:
+Above the mean for all three variables.
+Reflects regions with higher-than-average life expectancy, better median conditions, and moderately higher extremity, indicating potentially more balanced and developed areas.
+
+Cluster 5:
+Strongly above the mean for all three variables, with particularly high extremity and life expectancy.
+Represents regions with extremely favorable conditions for life expectancy and development but also higher extremity, possibly due to unique environmental, demographic, or social characteristics.
+
+// FACTOR ANALYSIS //
+* Merge the datasets using case_id as the key variable
+merge 1:m cntry using "/Users/massimodinicola/Desktop/Riccardo/Application for management/Work group/Task 3/ESS10.dta"
+browse
+
+** CHECK FOR COUNTRIES PRESENT IN BOTH **
+tab location
+tab cntry 
+//drop if cntry == "AL" | cntr == "AT" | cntry == "CY" | cntry == "DE" | cntry == "Germany" | cntry == "Kosovo" | cntry == "Lithuania" | cntry == "Luxembourg" | cntry == "Malta" | cntry == "Poland" | cntry == "Romania" | cntry == "Spain" | cntry == "Sweden" | cntry == "Ukraine" 
+
+gen overallwght = pweight*pspwght
+
+* 7 variables  
+summarize trst*
+misstable summarize trst* // missvalue what yo do
+misstable summarize trstprl trstlgl trstplc trstplt trstprt trstep trstun
+graph box trstplc // 1 outlier 
+//drop if missing(trstprl) | missing(trstlgl) | missing(trstplc) | missing(trstplt) | missing(trstprt) | missing(trstep) | missing(trstun) | missing(trstsci)
+pwcorr trstprl trstlgl trstplc trstplt trstprt trstep trstun trstsci
+browse
+* HeatMap
+matrix C = r(C)
+heatplot C, ///
+values(format(%9.3f)) ///
+color(hcl bluered, intensity(.8)) ///
+xlabel(, angle(45)) ///
+aspectratio(1) scale(0.8) ///
+lower nodiagonal ///
+title("Pairwise correlations") ///
+legend(off)
+graph export "corr.png", replace
+
+factor trstprl trstlgl trstplc trstplt trstprt trstep trstun trstsci
+// how many factors? EIGENVALUES 
+* Factor 1 explains the most trust in politicians and political parties and we named it politics. 
+* Factor 2 explains the most trust in European parliament and UN and we named it int_inst. 
+* Factor 3 explains the most trust in legal system and police and we named it local_law.
+
+factortest trstprl trstlgl trstplc trstplt trstprt trstep trstun trstsci
+estat kmo 
+
+// NOW MOVE TO THE EXTRACTION STAGE 
+* Our Stata tools (the Kaiser rule, which employs eigenvalues, the screen test criterion, and the factor analysis table) --> 3 factors 
+* eigenvalue = % of the entire model variance that a specific factor accounts for 
+screeplot, yline(1)
+asdoc factor trstprl trstlgl trstplc trstplt trstprt trstep trstun trstsci, factors(3) // extract 1 Factor 
+asdoc rotate, varimax blanks(0.5)
+predict Trust_politics Trust_inst Trust_local_law // name the Factor 
+summarize politics int_inst local_law
+* factors created acquire factor scores (based on the score of the laodings of the variables) 
+
+// REGRESSION // 
+* dependent variables = factors created 
+* independent variables = the countries grouped into clusters
+
+* significant difference in trust in politics and in local law by all the clusters.
+* cannot conclude the same thing for the factor representing trust in international institutions
+* the country belonging to cluster 5, Italy, that is the country that previously showed highest level of deaths, tests, cases and stringency index, is the one that has the most negative relationship with trust.
+
+ssc install estout
+eststo: reg Trust_politics i.location_cluster [w=overallwght]
+eststo: reg Trust_inst i.location_cluster [w=overallwght]
+eststo: reg Trust_local_law i.location_cluster [w=overallwght]
+asdoc esttab est3 est4 est5 
+
+
